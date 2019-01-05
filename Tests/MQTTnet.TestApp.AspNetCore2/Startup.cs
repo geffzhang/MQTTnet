@@ -5,9 +5,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
+using MQTTnet;
 using MQTTnet.AspNetCore;
-using MQTTnet.Core;
-using MQTTnet.Core.Server;
+using MQTTnet.Server;
 
 namespace MQTTnet.TestApp.AspNetCore2
 {
@@ -17,14 +17,23 @@ namespace MQTTnet.TestApp.AspNetCore2
 
         public void ConfigureServices(IServiceCollection services)
         {
-            var mqttServerOptions = new MqttServerOptionsBuilder().Build();
-            services.AddHostedMqttServer(mqttServerOptions);
+            var mqttServerOptions = new MqttServerOptionsBuilder()
+                .WithoutDefaultEndpoint()
+                .Build();
+            services
+                .AddHostedMqttServer(mqttServerOptions)
+                .AddMqttConnectionHandler()
+                .AddConnections();
         }
 
         // In class _Startup_ of the ASP.NET Core 2.0 project.
         public void Configure(IApplicationBuilder app, IHostingEnvironment env)
         {
-            app.UseMqttEndpoint();
+            app.UseConnections(c => c.MapConnectionHandler<MqttConnectionHandler>("/mqtt", options => {
+                options.WebSockets.SubProtocolSelector = MQTTnet.AspNetCore.ApplicationBuilderExtensions.SelectSubProtocol;
+            }));
+
+            //app.UseMqttEndpoint();
             app.UseMqttServer(server =>
             {
                 server.Started += async (sender, args) =>

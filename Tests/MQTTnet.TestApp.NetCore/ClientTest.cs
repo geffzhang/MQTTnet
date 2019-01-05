@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Text;
 using System.Threading.Tasks;
-using MQTTnet.Core;
-using MQTTnet.Core.Client;
+using MQTTnet.Client;
+using MQTTnet.Protocol;
 
 namespace MQTTnet.TestApp.NetCore
 {
@@ -12,24 +12,18 @@ namespace MQTTnet.TestApp.NetCore
         {
             try
             {
-                var options = new MqttClientOptions
-                {
-                    ClientId = "XYZ",
-                    CleanSession = true,
-                    ChannelOptions = new MqttClientTcpOptions
-                    {
-                        Server = "localhost"
-                    },
-                    //ChannelOptions = new MqttClientWebSocketOptions
-                    //{
-                    //    Uri = "ws://localhost:59690/mqtt"
-                    //}
-                };
+                MqttNetConsoleLogger.ForwardToConsole();
 
                 var factory = new MqttFactory();
-                
                 var client = factory.CreateMqttClient();
-
+                var clientOptions = new MqttClientOptions
+                {
+                    ChannelOptions = new MqttClientTcpOptions
+                    {
+                        Server = "127.0.0.1"
+                    }
+                };
+                
                 client.ApplicationMessageReceived += (s, e) =>
                 {
                     Console.WriteLine("### RECEIVED APPLICATION MESSAGE ###");
@@ -56,7 +50,7 @@ namespace MQTTnet.TestApp.NetCore
 
                     try
                     {
-                        await client.ConnectAsync(options);
+                        await client.ConnectAsync(clientOptions);
                     }
                     catch
                     {
@@ -66,7 +60,7 @@ namespace MQTTnet.TestApp.NetCore
 
                 try
                 {
-                    await client.ConnectAsync(options);
+                    await client.ConnectAsync(clientOptions);
                 }
                 catch (Exception exception)
                 {
@@ -78,6 +72,8 @@ namespace MQTTnet.TestApp.NetCore
                 while (true)
                 {
                     Console.ReadLine();
+
+                    await client.SubscribeAsync(new TopicFilter("test", MqttQualityOfServiceLevel.AtMostOnce));
 
                     var applicationMessage = new MqttApplicationMessageBuilder()
                         .WithTopic("A/B/C")

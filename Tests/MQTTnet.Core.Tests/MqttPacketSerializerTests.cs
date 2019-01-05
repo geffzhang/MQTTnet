@@ -1,12 +1,14 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using MQTTnet.Core.Adapter;
-using MQTTnet.Core.Packets;
-using MQTTnet.Core.Protocol;
-using MQTTnet.Core.Serializer;
+using MQTTnet.Adapter;
+using MQTTnet.Internal;
+using MQTTnet.Packets;
+using MQTTnet.Protocol;
+using MQTTnet.Serializer;
 
 namespace MQTTnet.Core.Tests
 {
@@ -25,7 +27,7 @@ namespace MQTTnet.Core.Tests
                 CleanSession = true
             };
 
-            SerializeAndCompare(p, "EB0ABE1RSXNkcAPCAHsAA1hZWgAEVVNFUgAEUEFTUw==", MqttProtocolVersion.V310);
+            SerializeAndCompare(p, "EB0ABk1RSXNkcAPCAHsAA1hZWgAEVVNFUgAEUEFTUw==", MqttProtocolVersion.V310);
         }
 
         [TestMethod]
@@ -119,10 +121,10 @@ namespace MQTTnet.Core.Tests
         {
             var p = new MqttConnAckPacket
             {
-                ConnectReturnCode = MqttConnectReturnCode.ConnectionAccepted
+                ConnectReturnCode = MqttConnectReturnCode.ConnectionRefusedNotAuthorized
             };
 
-            SerializeAndCompare(p, "IAIAAA==", MqttProtocolVersion.V310);
+            SerializeAndCompare(p, "IAIABQ==", MqttProtocolVersion.V310);
         }
 
         [TestMethod]
@@ -135,6 +137,64 @@ namespace MQTTnet.Core.Tests
             };
 
             DeserializeAndCompare(p, "IAIBBQ==");
+        }
+
+        [TestMethod]
+        public void DeserializeV310_MqttConnAckPacket()
+        {
+            var p = new MqttConnAckPacket
+            {
+                ConnectReturnCode = MqttConnectReturnCode.ConnectionRefusedNotAuthorized
+            };
+
+            DeserializeAndCompare(p, "IAIABQ==", MqttProtocolVersion.V310);
+        }
+
+        [TestMethod]
+        public void Serialize_LargePacket()
+        {
+            var serializer = new MqttPacketSerializer { ProtocolVersion = MqttProtocolVersion.V311 };
+
+            const int payloadLength = 80000;
+
+            var payload = new byte[payloadLength];
+
+            var value = 0;
+            for (var i = 0; i < payloadLength; i++)
+            {
+                if (value > 255)
+                {
+                    value = 0;
+                }
+
+                payload[i] = (byte)value;
+            }
+
+            var publishPacket = new MqttPublishPacket
+            {
+                Topic = "abcdefghijklmnopqrstuvwxyz0123456789",
+                Payload = payload
+            };
+
+            var buffer = serializer.Serialize(publishPacket);
+            var testChannel = new TestMqttChannel(new MemoryStream(buffer.Array, buffer.Offset, buffer.Count));
+
+            var header = MqttPacketReader.ReadFixedHeaderAsync(
+                testChannel, 
+                new byte[2],
+                new byte[1], 
+                CancellationToken.None).GetAwaiter().GetResult();
+
+            var eof = buffer.Offset + buffer.Count;
+
+            var receivedPacket = new ReceivedMqttPacket(
+                header.Flags,
+                new MqttPacketBodyReader(buffer.Array, eof - header.RemainingLength, buffer.Count + buffer.Offset));
+
+            var packet = (MqttPublishPacket)serializer.Deserialize(receivedPacket);
+
+            Assert.AreEqual(publishPacket.Topic, packet.Topic);
+            Assert.IsTrue(publishPacket.Payload.SequenceEqual(packet.Payload));
         }
 
         [TestMethod]
@@ -185,6 +245,64 @@ namespace MQTTnet.Core.Tests
             };
 
             DeserializeAndCompare(p, "Ow4ABUEvQi9DAHtIRUxMTw==");
+        }
+
+        [TestMethod]
+        public void DeserializeV311_MqttPublishPacket_Qos1()
+        {
+            var p = new MqttPublishPacket
+            {
+                QualityOfServiceLevel = MqttQualityOfServiceLevel.AtMostOnce,
+            };
+
+            var p2 = Roundtrip(p);
+
+            Assert.AreEqual(p.QualityOfServiceLevel, p2.QualityOfServiceLevel);
+            Assert.AreEqual(p.Dup, p2.Dup);
+        }
+
+        [TestMethod]
+        public void DeserializeV311_MqttPublishPacket_Qos2()
+        {
+            var p = new MqttPublishPacket
+            {
+                QualityOfServiceLevel = MqttQualityOfServiceLevel.AtLeastOnce,
+                PacketIdentifier = 1
+            };
+
+            var p2 = Roundtrip(p);
+
+            Assert.AreEqual(p.QualityOfServiceLevel, p2.QualityOfServiceLevel);
+            Assert.AreEqual(p.Dup, p2.Dup);
+        }
+
+        [TestMethod]
+        public void DeserializeV311_MqttPublishPacket_Qos3()
+        {
+            var p = new MqttPublishPacket
+            {
+                QualityOfServiceLevel = MqttQualityOfServiceLevel.ExactlyOnce,
+                PacketIdentifier = 1
+            };
+
+            var p2 = Roundtrip(p);
+
+            Assert.AreEqual(p.QualityOfServiceLevel, p2.QualityOfServiceLevel);
+            Assert.AreEqual(p.Dup, p2.Dup);
+        }
+
+
+        [TestMethod]
+        public void DeserializeV311_MqttPublishPacket_DupFalse()
+        {
+            var p = new MqttPublishPacket
+            {
+                Dup = false,
+            };
+
+            var p2 = Roundtrip(p);
+
+            Assert.AreEqual(p.Dup, p2.Dup);
         }
 
         [TestMethod]
@@ -392,29 +510,65 @@ namespace MQTTnet.Core.Tests
         private static void SerializeAndCompare(MqttBasePacket packet, string expectedBase64Value, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V311)
         {
             var serializer = new MqttPacketSerializer { ProtocolVersion = protocolVersion };
-            var buffer = serializer.Serialize(packet);
+            var data = serializer.Serialize(packet);
 
-            Assert.AreEqual(expectedBase64Value, Convert.ToBase64String(buffer));
+            Assert.AreEqual(expectedBase64Value, Convert.ToBase64String(Join(data)));
         }
 
-        private static void DeserializeAndCompare(MqttBasePacket packet, string expectedBase64Value)
+        private static void DeserializeAndCompare(MqttBasePacket packet, string expectedBase64Value, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V311)
         {
-            var serializer = new MqttPacketSerializer();
+            var serializer = new MqttPacketSerializer { ProtocolVersion = protocolVersion };
 
             var buffer1 = serializer.Serialize(packet);
 
-            using (var headerStream = new MemoryStream(buffer1))
+            using (var headerStream = new MemoryStream(Join(buffer1)))
             {
-                var header = MqttPacketReader.ReadHeaderFromSource(headerStream, CancellationToken.None);
+                var channel = new TestMqttChannel(headerStream);
+                var fixedHeader = new byte[2];
+                var singleByteBuffer = new byte[1];
+                var header = MqttPacketReader.ReadFixedHeaderAsync(channel, fixedHeader, singleByteBuffer, CancellationToken.None).GetAwaiter().GetResult();
 
-                using (var bodyStream = new MemoryStream(buffer1, (int)headerStream.Position, header.BodyLength))
+                using (var bodyStream = new MemoryStream(Join(buffer1), (int)headerStream.Position, header.RemainingLength))
                 {
-                    var deserializedPacket = serializer.Deserialize(new ReceivedMqttPacket(header, bodyStream));
+                    var deserializedPacket = serializer.Deserialize(new ReceivedMqttPacket(header.Flags, new MqttPacketBodyReader(bodyStream.ToArray(), 0, (int)bodyStream.Length)));
                     var buffer2 = serializer.Serialize(deserializedPacket);
 
-                    Assert.AreEqual(expectedBase64Value, Convert.ToBase64String(buffer2));
+                    Assert.AreEqual(expectedBase64Value, Convert.ToBase64String(Join(buffer2)));
                 }
             }
+        }
+
+        private static T Roundtrip<T>(T packet, MqttProtocolVersion protocolVersion = MqttProtocolVersion.V311)
+            where T : MqttBasePacket
+        {
+            var serializer = new MqttPacketSerializer { ProtocolVersion = protocolVersion };
+
+            var buffer1 = serializer.Serialize(packet);
+
+            using (var headerStream = new MemoryStream(Join(buffer1)))
+            {
+                var channel = new TestMqttChannel(headerStream);
+                var fixedHeader = new byte[2];
+                var singleByteBuffer = new byte[1];
+
+                var header = MqttPacketReader.ReadFixedHeaderAsync(channel, fixedHeader, singleByteBuffer, CancellationToken.None).GetAwaiter().GetResult();
+
+                using (var bodyStream = new MemoryStream(Join(buffer1), (int)headerStream.Position, header.RemainingLength))
+                {
+                    return (T)serializer.Deserialize(new ReceivedMqttPacket(header.Flags, new MqttPacketBodyReader(bodyStream.ToArray(), 0, (int)bodyStream.Length)));
+                }
+            }
+        }
+
+        private static byte[] Join(params ArraySegment<byte>[] chunks)
+        {
+            var buffer = new MemoryStream();
+            foreach (var chunk in chunks)
+            {
+                buffer.Write(chunk.Array, chunk.Offset, chunk.Count);
+            }
+
+            return buffer.ToArray();
         }
     }
 }

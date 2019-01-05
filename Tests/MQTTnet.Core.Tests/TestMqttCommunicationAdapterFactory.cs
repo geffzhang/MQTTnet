@@ -1,6 +1,6 @@
-﻿using MQTTnet.Core.Adapter;
-using MQTTnet.Core.Client;
-using MQTTnet.Core.Diagnostics;
+﻿using MQTTnet.Adapter;
+using MQTTnet.Client;
+using MQTTnet.Diagnostics;
 
 namespace MQTTnet.Core.Tests
 {
@@ -13,7 +13,7 @@ namespace MQTTnet.Core.Tests
             _adapter = adapter;
         }
         
-        public IMqttChannelAdapter CreateClientAdapter(IMqttClientChannelOptions options, IMqttNetLogger logger)
+        public IMqttChannelAdapter CreateClientAdapter(IMqttClientOptions options, IMqttNetChildLogger logger)
         {
             return _adapter;
         }

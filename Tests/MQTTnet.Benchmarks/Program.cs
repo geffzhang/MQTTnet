@@ -1,5 +1,6 @@
 ﻿using System;
 using BenchmarkDotNet.Running;
+using MQTTnet.Benchmarks.Configurations;
 using MQTTnet.Diagnostics;
 
 namespace MQTTnet.Benchmarks
@@ -8,7 +9,7 @@ namespace MQTTnet.Benchmarks
     {
         public static void Main(string[] args)
         {
-            Console.WriteLine($"MQTTnet - BenchmarkApp.{TargetFrameworkInfoProvider.TargetFramework}");
+            Console.WriteLine($"MQTTnet - BenchmarkApp.{TargetFrameworkProvider.TargetFramework}");
             Console.WriteLine("1 = MessageProcessingBenchmark");
             Console.WriteLine("2 = SerializerBenchmark");
             Console.WriteLine("3 = LoggerBenchmark");
@@ -43,7 +44,7 @@ namespace MQTTnet.Benchmarks
                     BenchmarkRunner.Run<TcpPipesBenchmark>();
                     break;
                 case '8':
-                    BenchmarkRunner.Run<MessageProcessingMqttConnectionContextBenchmark>(new AllowNonOptimized());
+                    BenchmarkRunner.Run<MessageProcessingMqttConnectionContextBenchmark>(new RuntimeCompareConfig()/*new AllowNonOptimized()*/);
                     break;
             }
 

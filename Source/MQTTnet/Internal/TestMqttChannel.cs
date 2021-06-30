@@ -1,27 +1,37 @@
 ﻿using System.IO;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using MQTTnet.Channel;
 
 namespace MQTTnet.Internal
 {
-    public class TestMqttChannel : IMqttChannel
+    public sealed class TestMqttChannel : IMqttChannel
     {
-        private readonly MemoryStream _stream;
+        readonly MemoryStream _stream;
 
         public TestMqttChannel(MemoryStream stream)
         {
             _stream = stream;
         }
 
+        public TestMqttChannel(byte[] buffer)
+        {
+            _stream = new MemoryStream(buffer);
+        }
+
         public string Endpoint { get; } = "<Test channel>";
+
+        public bool IsSecureConnection { get; } = false;
+
+        public X509Certificate2 ClientCertificate { get; }
 
         public Task ConnectAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(0);
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(0);
         }

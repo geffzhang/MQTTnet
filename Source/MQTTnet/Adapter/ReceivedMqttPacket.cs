@@ -1,17 +1,21 @@
-﻿using MQTTnet.Serializer;
+﻿using System;
+using MQTTnet.Formatter;
 
 namespace MQTTnet.Adapter
 {
-    public class ReceivedMqttPacket
+    public sealed class ReceivedMqttPacket
     {
-        public ReceivedMqttPacket(byte fixedHeader, MqttPacketBodyReader body)
+        public ReceivedMqttPacket(byte fixedHeader, IMqttPacketBodyReader bodyReader, int totalLength)
         {
             FixedHeader = fixedHeader;
-            Body = body;
+            BodyReader = bodyReader ?? throw new ArgumentNullException(nameof(bodyReader));
+            TotalLength = totalLength;
         }
 
         public byte FixedHeader { get; }
 
-        public MqttPacketBodyReader Body { get; }
+        public IMqttPacketBodyReader BodyReader { get; }
+
+        public int TotalLength { get; }
     }
 }

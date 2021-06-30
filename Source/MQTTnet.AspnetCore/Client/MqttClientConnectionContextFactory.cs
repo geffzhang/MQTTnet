@@ -1,20 +1,17 @@
-﻿using System;
-using System.Net;
-using MQTTnet.Adapter;
+﻿using MQTTnet.Adapter;
 using MQTTnet.AspNetCore.Client.Tcp;
-using MQTTnet.Client;
-using MQTTnet.Diagnostics;
-using MQTTnet.Serializer;
+using MQTTnet.Client.Options;
+using MQTTnet.Formatter;
+using System;
+using System.Net;
 
 namespace MQTTnet.AspNetCore.Client
 {
     public class MqttClientConnectionContextFactory : IMqttClientAdapterFactory
     {
-        public IMqttChannelAdapter CreateClientAdapter(IMqttClientOptions options, IMqttNetChildLogger logger)
+        public IMqttChannelAdapter CreateClientAdapter(IMqttClientOptions options)
         {
             if (options == null) throw new ArgumentNullException(nameof(options));
-
-            var serializer = new MqttPacketSerializer { ProtocolVersion = options.ProtocolVersion };
 
             switch (options.ChannelOptions)
             {
@@ -22,7 +19,10 @@ namespace MQTTnet.AspNetCore.Client
                     {
                         var endpoint = new DnsEndPoint(tcpOptions.Server, tcpOptions.GetPort());
                         var tcpConnection = new TcpConnection(endpoint);
-                        return new MqttConnectionContext(serializer, tcpConnection);
+
+                        var writer = new SpanBasedMqttPacketWriter();
+                        var formatter = new MqttPacketFormatterAdapter(options.ProtocolVersion, writer);
+                        return new MqttConnectionContext(formatter, tcpConnection);
                     }
                 default:
                     {

@@ -4,25 +4,27 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Networking;
 using Windows.Networking.Sockets;
 using Windows.Security.Cryptography.Certificates;
 using MQTTnet.Channel;
-using MQTTnet.Client;
+using MQTTnet.Client.Options;
 using MQTTnet.Server;
 
 namespace MQTTnet.Implementations
 {
-    public class MqttTcpChannel : IMqttChannel
+    public sealed class MqttTcpChannel : IMqttChannel
     {
-        private readonly MqttClientTcpOptions _options;
-        private readonly int _bufferSize;
+        readonly MqttClientTcpOptions _options;
+        readonly int _bufferSize;
 
-        private StreamSocket _socket;
-        private Stream _readStream;
-        private Stream _writeStream;
+        StreamSocket _socket;
+        Stream _readStream;
+        Stream _writeStream;
 
         public MqttTcpChannel(IMqttClientOptions clientOptions)
         {
@@ -30,41 +32,39 @@ namespace MQTTnet.Implementations
             _bufferSize = _options.BufferSize;
         }
 
-        public MqttTcpChannel(StreamSocket socket, IMqttServerOptions serverOptions)
+        public MqttTcpChannel(StreamSocket socket, X509Certificate2 clientCertificate, IMqttServerOptions serverOptions)
         {
             _socket = socket ?? throw new ArgumentNullException(nameof(socket));
             _bufferSize = serverOptions.DefaultEndpointOptions.BufferSize;
 
             CreateStreams();
+
+            IsSecureConnection = socket.Information.ProtectionLevel >= SocketProtectionLevel.Tls12;
+            ClientCertificate = clientCertificate;
+
+            Endpoint = _socket.Information.RemoteAddress + ":" + _socket.Information.RemotePort;
         }
 
         public static Func<MqttClientTcpOptions, IEnumerable<ChainValidationResult>> CustomIgnorableServerCertificateErrorsResolver { get; set; }
 
-        public string Endpoint
-        {
-            get
-            {
-                if (_socket?.Information != null)
-                {
-                    return _socket.Information.RemoteAddress + ":" + _socket.Information.RemotePort;
-                }
+        public string Endpoint { get; private set; }
 
-                return null;
-            }
-        }
+        public bool IsSecureConnection { get; }
+
+        public X509Certificate2 ClientCertificate { get; }
 
         public async Task ConnectAsync(CancellationToken cancellationToken)
         {
             if (_socket == null)
             {
                 _socket = new StreamSocket();
-                _socket.Control.NoDelay = true;
+                _socket.Control.NoDelay = _options.NoDelay;
                 _socket.Control.KeepAlive = true;
             }
 
-            if (!_options.TlsOptions.UseTls)
+            if (_options.TlsOptions?.UseTls != true)
             {
-                await _socket.ConnectAsync(new HostName(_options.Server), _options.GetPort().ToString());
+                await _socket.ConnectAsync(new HostName(_options.Server), _options.GetPort().ToString()).AsTask().ConfigureAwait(false);
             }
             else
             {
@@ -75,13 +75,25 @@ namespace MQTTnet.Implementations
                     _socket.Control.IgnorableServerCertificateErrors.Add(ignorableChainValidationResult);
                 }
 
-                await _socket.ConnectAsync(new HostName(_options.Server), _options.GetPort().ToString(), SocketProtectionLevel.Tls12);
+                var socketProtectionLevel = SocketProtectionLevel.Tls12;
+                if (_options.TlsOptions.SslProtocol == SslProtocols.Tls11)
+                {
+                    socketProtectionLevel = SocketProtectionLevel.Tls11;
+                }
+                else if (_options.TlsOptions.SslProtocol == SslProtocols.Tls)
+                {
+                    socketProtectionLevel = SocketProtectionLevel.Tls10;
+                }
+
+                await _socket.ConnectAsync(new HostName(_options.Server), _options.GetPort().ToString(), socketProtectionLevel).AsTask().ConfigureAwait(false);
             }
+
+            Endpoint = _socket.Information.RemoteAddress + ":" + _socket.Information.RemotePort;
 
             CreateStreams();
         }
 
-        public Task DisconnectAsync()
+        public Task DisconnectAsync(CancellationToken cancellationToken)
         {
             Dispose();
             return Task.FromResult(0);
@@ -117,7 +129,7 @@ namespace MQTTnet.Implementations
 
             if (options.TlsOptions.Certificates.Count > 1)
             {
-                throw new NotSupportedException("Only one client certificate is supported for UWP.");
+                throw new NotSupportedException("Only one client certificate is supported when using 'uap10.0'.");
             }
 
             return new Certificate(options.TlsOptions.Certificates.First().AsBuffer());

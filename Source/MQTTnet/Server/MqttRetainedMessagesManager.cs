@@ -1,23 +1,30 @@
-﻿using System;
+﻿using MQTTnet.Diagnostics;
+using MQTTnet.Implementations;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
-using MQTTnet.Diagnostics;
+using MQTTnet.Internal;
 
 namespace MQTTnet.Server
 {
-    public class MqttRetainedMessagesManager
+    public sealed class MqttRetainedMessagesManager : IMqttRetainedMessagesManager
     {
-        private readonly Dictionary<string, MqttApplicationMessage> _messages = new Dictionary<string, MqttApplicationMessage>();
+        readonly AsyncLock _storageAccessLock = new AsyncLock();
+        readonly Dictionary<string, MqttApplicationMessage> _messages = new Dictionary<string, MqttApplicationMessage>();
 
-        private readonly IMqttNetChildLogger _logger;
-        private readonly IMqttServerOptions _options;
+        IMqttNetScopedLogger _logger;
+        IMqttServerOptions _options;
 
-        public MqttRetainedMessagesManager(IMqttServerOptions options, IMqttNetChildLogger logger)
+        // TODO: Get rid of the logger here!
+        public Task Start(IMqttServerOptions options, IMqttNetLogger logger)
         {
             if (logger == null) throw new ArgumentNullException(nameof(logger));
-            _logger = logger.CreateChildLogger(nameof(MqttRetainedMessagesManager));
+            _logger = logger.CreateScopedLogger(nameof(MqttRetainedMessagesManager));
+
             _options = options ?? throw new ArgumentNullException(nameof(options));
+            return PlatformAbstractionLayer.CompletedTask;
         }
 
         public async Task LoadMessagesAsync()
@@ -34,9 +41,13 @@ namespace MQTTnet.Server
                 lock (_messages)
                 {
                     _messages.Clear();
-                    foreach (var retainedMessage in retainedMessages)
+
+                    if (retainedMessages != null)
                     {
-                        _messages[retainedMessage.Topic] = retainedMessage;
+                        foreach (var retainedMessage in retainedMessages)
+                        {
+                            _messages[retainedMessage.Topic] = retainedMessage;
+                        }
                     }
                 }
             }
@@ -53,11 +64,13 @@ namespace MQTTnet.Server
             try
             {
                 List<MqttApplicationMessage> messagesForSave = null;
+                var saveIsRequired = false;
+                
                 lock (_messages)
                 {
-                    var saveIsRequired = false;
+                    var hasPayload = applicationMessage.Payload != null && applicationMessage.Payload.Length > 0;
 
-                    if (applicationMessage.Payload?.Length == 0)
+                    if (!hasPayload)
                     {
                         saveIsRequired = _messages.Remove(applicationMessage.Topic);
                         _logger.Verbose("Client '{0}' cleared retained message for topic '{1}'.", clientId, applicationMessage.Topic);
@@ -71,7 +84,7 @@ namespace MQTTnet.Server
                         }
                         else
                         {
-                            if (existingMessage.QualityOfServiceLevel != applicationMessage.QualityOfServiceLevel || !existingMessage.Payload.SequenceEqual(applicationMessage.Payload ?? new byte[0]))
+                            if (existingMessage.QualityOfServiceLevel != applicationMessage.QualityOfServiceLevel || !existingMessage.Payload.SequenceEqual(applicationMessage.Payload ?? PlatformAbstractionLayer.EmptyByteArray))
                             {
                                 _messages[applicationMessage.Topic] = applicationMessage;
                                 saveIsRequired = true;
@@ -87,15 +100,15 @@ namespace MQTTnet.Server
                     }
                 }
 
-                if (messagesForSave == null)
+                if (saveIsRequired)
                 {
-                    _logger.Verbose("Skipped saving retained messages because no changes were detected.");
-                    return;
-                }
-
-                if (_options.Storage != null)
-                {
-                    await _options.Storage.SaveRetainedMessagesAsync(messagesForSave).ConfigureAwait(false);
+                    if (_options.Storage != null)
+                    {
+                        using (await _storageAccessLock.WaitAsync(CancellationToken.None).ConfigureAwait(false))
+                        {
+                            await _options.Storage.SaveRetainedMessagesAsync(messagesForSave).ConfigureAwait(false);
+                        }
+                    }
                 }
             }
             catch (Exception exception)
@@ -104,39 +117,44 @@ namespace MQTTnet.Server
             }
         }
 
-        public IList<MqttApplicationMessage> GetSubscribedMessages(ICollection<TopicFilter> topicFilters)
+        public Task<IList<MqttApplicationMessage>> GetSubscribedMessagesAsync(ICollection<MqttTopicFilter> topicFilters)
         {
-            var retainedMessages = new List<MqttApplicationMessage>();
+            if (topicFilters == null) throw new ArgumentNullException(nameof(topicFilters));
 
+            var matchingRetainedMessages = new List<MqttApplicationMessage>();
+
+            List<MqttApplicationMessage> retainedMessages;
             lock (_messages)
             {
-                foreach (var retainedMessage in _messages.Values)
-                {
-                    foreach (var topicFilter in topicFilters)
-                    {
-                        if (!MqttTopicFilterComparer.IsMatch(retainedMessage.Topic, topicFilter.Topic))
-                        {
-                            continue;
-                        }
+                retainedMessages = _messages.Values.ToList();
+            }
 
-                        retainedMessages.Add(retainedMessage);
-                        break;
+            foreach (var retainedMessage in retainedMessages)
+            {
+                foreach (var topicFilter in topicFilters)
+                {
+                    if (!MqttTopicFilterComparer.IsMatch(retainedMessage.Topic, topicFilter.Topic))
+                    {
+                        continue;
                     }
+
+                    matchingRetainedMessages.Add(retainedMessage);
+                    break;
                 }
             }
 
-            return retainedMessages;
+            return Task.FromResult((IList<MqttApplicationMessage>)matchingRetainedMessages);
         }
 
-        public IList<MqttApplicationMessage> GetMessages()
+        public Task<IList<MqttApplicationMessage>> GetMessagesAsync()
         {
             lock (_messages)
             {
-                return _messages.Values.ToList();
+                return Task.FromResult((IList<MqttApplicationMessage>)_messages.Values.ToList());
             }
         }
 
-        public Task ClearMessagesAsync()
+        public async Task ClearMessagesAsync()
         {
             lock (_messages)
             {
@@ -145,10 +163,11 @@ namespace MQTTnet.Server
 
             if (_options.Storage != null)
             {
-                return _options.Storage.SaveRetainedMessagesAsync(new List<MqttApplicationMessage>());
+                using (await _storageAccessLock.WaitAsync(CancellationToken.None).ConfigureAwait(false))
+                {
+                    await _options.Storage.SaveRetainedMessagesAsync(new List<MqttApplicationMessage>()).ConfigureAwait(false);
+                }
             }
-
-            return Task.FromResult((object)null);
         }
     }
 }

@@ -1,16 +1,19 @@
-﻿using MQTTnet.Exceptions;
-using MQTTnet.Protocol;
+using System;
+using MQTTnet.Client.Connecting;
+using MQTTnet.Exceptions;
 
 namespace MQTTnet.Adapter
 {
-    public class MqttConnectingFailedException : MqttCommunicationException
+    public sealed class MqttConnectingFailedException : MqttCommunicationException
     {
-        public MqttConnectingFailedException(MqttConnectReturnCode returnCode)
-            : base($"Connecting with MQTT server failed ({returnCode}).")
+        public MqttConnectingFailedException(string message, Exception innerException, MqttClientAuthenticateResult authenticateResult)
+            : base(message, innerException)
         {
-            ReturnCode = returnCode;
+            Result = authenticateResult;
         }
 
-        public MqttConnectReturnCode ReturnCode { get; }
+        public MqttClientAuthenticateResult Result { get; }
+
+        public MqttClientConnectResultCode ResultCode => Result?.ResultCode ?? MqttClientConnectResultCode.UnspecifiedError;
     }
 }
